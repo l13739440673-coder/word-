@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模板存储诊断工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007AFF;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #output {
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .success {
+            color: #28a745;
+        }
+        .error {
+            color: #dc3545;
+        }
+        .warning {
+            color: #ffc107;
+        }
+        .info {
+            color: #17a2b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 模板存储诊断工具</h1>
+        <p>这个工具可以帮助你检查模板存储是否正常工作。</p>
+        
+        <div>
+            <button onclick="checkBrowserStorage()">检查浏览器存储</button>
+            <button onclick="checkFileStorage()">检查文件存储</button>
+            <button onclick="listAllTemplates()">列出所有模板</button>
+            <button onclick="clearOutput()">清空输出</button>
+        </div>
+        
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const output = document.getElementById('output');
+
+        function log(message, type = 'info') {
+            const span = document.createElement('span');
+            span.className = type;
+            span.textContent = message + '\n';
+            output.appendChild(span);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            output.innerHTML = '';
+        }
+
+        async function checkBrowserStorage() {
+            clearOutput();
+            log('=== 检查浏览器存储（IndexedDB） ===', 'info');
+            
+            try {
+                // 打开数据库
+                const request = indexedDB.open('WordTemplateToolDB', 1);
+                
+                request.onerror = () => {
+                    log('✗ 无法打开 IndexedDB', 'error');
+                };
+                
+                request.onsuccess = (event) => {
+                    const db = event.target.result;
+                    log('✓ IndexedDB 连接成功', 'success');
+                    
+                    // 检查对象存储
+                    if (db.objectStoreNames.contains('templates')) {
+                        log('✓ templates 对象存储存在', 'success');
+                        
+                        const transaction = db.transaction(['templates'], 'readonly');
+                        const store = transaction.objectStore('templates');
+                        const countRequest = store.count();
+                        
+                        countRequest.onsuccess = () => {
+                            log(`✓ 找到 ${countRequest.result} 个模板`, 'success');
+                            
+                            // 列出所有模板
+                            const getAllRequest = store.getAll();
+                            getAllRequest.onsuccess = () => {
+                                const templates = getAllRequest.result;
+                                if (templates.length > 0) {
+                                    log('\n模板列表:', 'info');
+                                    templates.forEach((t, i) => {
+                                        log(`  ${i + 1}. ${t.name} (ID: ${t.id})`, 'info');
+                                    });
+                                }
+                            };
+                        };
+                    } else {
+                        log('✗ templates 对象存储不存在', 'error');
+                    }
+                    
+                    if (db.objectStoreNames.contains('records')) {
+                        log('✓ records 对象存储存在', 'success');
+                    } else {
+                        log('✗ records 对象存储不存在', 'error');
+                    }
+                    
+                    db.close();
+                };
+                
+                request.onupgradeneeded = (event) => {
+                    log('⚠ 数据库需要升级', 'warning');
+                };
+                
+            } catch (error) {
+                log(`✗ 检查失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkFileStorage() {
+            clearOutput();
+            log('=== 检查文件存储 ===', 'info');
+            
+            // 检查浏览器支持
+            if (!('showDirectoryPicker' in window)) {
+                log('✗ 浏览器不支持文件系统 API', 'error');
+                log('  请使用 Chrome 86+ 或 Edge 86+', 'warning');
+                return;
+            }
+            
+            log('✓ 浏览器支持文件系统 API', 'success');
+            
+            try {
+                // 检查是否已设置工作区
+                const dbRequest = indexedDB.open('WordToolWorkspace', 1);
+                
+                dbRequest.onsuccess = async (event) => {
+                    const db = event.target.result;
+                    
+                    if (!db.objectStoreNames.contains('workspace')) {
+                        log('⚠ 未找到工作区配置', 'warning');
+                        log('  请点击应用中的"设置工作区"按钮', 'info');
+                        db.close();
+                        return;
+                    }
+                    
+                    const transaction = db.transaction(['workspace'], 'readonly');
+                    const store = transaction.objectStore('workspace');
+                    const getRequest = store.get('workspace-handle');
+                    
+                    getRequest.onsuccess = async () => {
+                        if (!getRequest.result) {
+                            log('⚠ 未找到工作区句柄', 'warning');
+                            log('  请点击应用中的"设置工作区"按钮', 'info');
+                            db.close();
+                            return;
+                        }
+                        
+                        const handle = getRequest.result.handle;
+                        
+                        try {
+                            // 请求权限
+                            const permission = await handle.queryPermission({ mode: 'readwrite' });
+                            if (permission !== 'granted') {
+                                log('⚠ 需要重新授予文件访问权限', 'warning');
+                                const newPermission = await handle.requestPermission({ mode: 'readwrite' });
+                                if (newPermission !== 'granted') {
+                                    log('✗ 未授予权限', 'error');
+                                    db.close();
+                                    return;
+                                }
+                            }
+                            
+                            log('✓ 文件访问权限已授予', 'success');
+                            log(`✓ 工作区: ${handle.name}`, 'success');
+                            
+                            // 检查 templates 文件夹
+                            try {
+                                const templatesDir = await handle.getDirectoryHandle('templates');
+                                log('✓ templates 文件夹存在', 'success');
+                                
+                                let count = 0;
+                                log('\n扫描模板文件...', 'info');
+                                for await (const entry of templatesDir.values()) {
+                                    if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+                                        count++;
+                                        log(`  ${count}. ${entry.name}`, 'info');
+                                    }
+                                }
+                                log(`\n✓ 找到 ${count} 个模板文件`, 'success');
+                            } catch (e) {
+                                log('✗ templates 文件夹不存在或无法访问', 'error');
+                            }
+                            
+                            // 检查 records 文件夹
+                            try {
+                                const recordsDir = await handle.getDirectoryHandle('records');
+                                log('✓ records 文件夹存在', 'success');
+                            } catch (e) {
+                                log('⚠ records 文件夹不存在', 'warning');
+                            }
+                            
+                        } catch (error) {
+                            log(`✗ 访问工作区失败: ${error.message}`, 'error');
+                        }
+                        
+                        db.close();
+                    };
+                };
+                
+            } catch (error) {
+                log(`✗ 检查失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function listAllTemplates() {
+            clearOutput();
+            log('=== 列出所有模板 ===', 'info');
+            
+            // 先检查浏览器存储
+            log('\n【浏览器存储】', 'info');
+            await new Promise((resolve) => {
+                const request = indexedDB.open('WordTemplateToolDB', 1);
+                request.onsuccess = (event) => {
+                    const db = event.target.result;
+                    if (db.objectStoreNames.contains('templates')) {
+                        const transaction = db.transaction(['templates'], 'readonly');
+                        const store = transaction.objectStore('templates');
+                        const getAllRequest = store.getAll();
+                        
+                        getAllRequest.onsuccess = () => {
+                            const templates = getAllRequest.result;
+                            if (templates.length > 0) {
+                                templates.forEach((t, i) => {
+                                    log(`${i + 1}. ${t.name}`, 'success');
+                                    log(`   ID: ${t.id}`, 'info');
+                                    log(`   创建: ${t.createdAt}`, 'info');
+                                    log(`   更新: ${t.updatedAt}`, 'info');
+                                });
+                            } else {
+                                log('  (空)', 'warning');
+                            }
+                            db.close();
+                            resolve();
+                        };
+                    } else {
+                        log('  (未初始化)', 'warning');
+                        db.close();
+                        resolve();
+                    }
+                };
+                request.onerror = () => {
+                    log('  (无法访问)', 'error');
+                    resolve();
+                };
+            });
+            
+            // 检查文件存储
+            log('\n【文件存储】', 'info');
+            if (!('showDirectoryPicker' in window)) {
+                log('  (浏览器不支持)', 'warning');
+                return;
+            }
+            
+            try {
+                const dbRequest = indexedDB.open('WordToolWorkspace', 1);
+                dbRequest.onsuccess = async (event) => {
+                    const db = event.target.result;
+                    if (db.objectStoreNames.contains('workspace')) {
+                        const transaction = db.transaction(['workspace'], 'readonly');
+                        const store = transaction.objectStore('workspace');
+                        const getRequest = store.get('workspace-handle');
+                        
+                        getRequest.onsuccess = async () => {
+                            if (getRequest.result) {
+                                const handle = getRequest.result.handle;
+                                try {
+                                    const permission = await handle.queryPermission({ mode: 'readwrite' });
+                                    if (permission !== 'granted') {
+                                        await handle.requestPermission({ mode: 'readwrite' });
+                                    }
+                                    
+                                    const templatesDir = await handle.getDirectoryHandle('templates');
+                                    let count = 0;
+                                    for await (const entry of templatesDir.values()) {
+                                        if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+                                            count++;
+                                            const file = await entry.getFile();
+                                            const content = await file.text();
+                                            const template = JSON.parse(content);
+                                            log(`${count}. ${template.name}`, 'success');
+                                            log(`   文件: ${entry.name}`, 'info');
+                                            log(`   ID: ${template.id}`, 'info');
+                                        }
+                                    }
+                                    if (count === 0) {
+                                        log('  (空)', 'warning');
+                                    }
+                                } catch (error) {
+                                    log(`  (无法访问: ${error.message})`, 'error');
+                                }
+                            } else {
+                                log('  (未设置工作区)', 'warning');
+                            }
+                            db.close();
+                        };
+                    } else {
+                        log('  (未初始化)', 'warning');
+                        db.close();
+                    }
+                };
+            } catch (error) {
+                log(`  (错误: ${error.message})`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>
